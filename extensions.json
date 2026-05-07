@@ -5,13 +5,13 @@
       "id": "nostrclient",
       "repo": "https://github.com/BenGWeeks/nostrclient",
       "name": "Nostr Client (Weeks)",
-      "version": "1.1.0+wf1",
+      "version": "1.1.0+wf2",
       "min_lnbits_version": "1.0.0",
-      "short_description": "Weeks-family build — adds NIP-01 OK / CLOSED responses to client-published events (lnbits/nostrclient#68).",
+      "short_description": "Weeks-family build — NIP-01 OK / CLOSED responses (#68), Test Endpoint dialog (#56), relay-section UI polish (#64).",
       "icon": "https://raw.githubusercontent.com/BenGWeeks/nostrclient/weeks-family/static/images/nostr-bitcoin.png",
       "details_link": "https://raw.githubusercontent.com/BenGWeeks/nostrclient/weeks-family/config.json",
-      "archive": "https://github.com/BenGWeeks/nostrclient/archive/refs/tags/v1.1.0-wf1.zip",
-      "hash": "46a794e825fadeacfba12fbc4b51d2f91f3e0a07bb35544812124b87f949913c"
+      "archive": "https://github.com/BenGWeeks/nostrclient/archive/refs/tags/v1.1.0-wf2.zip",
+      "hash": "2cb5f4c2ab1da98aa630d515cb0efe8cd8eafd24dae3d344312f5f6c5eb9c4e0"
     }
   ]
 }
