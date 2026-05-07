@@ -1,7 +1,7 @@
 {
-  "name": "Nostr Client",
+  "name": "Nostr Client (Weeks)",
   "short_description": "Nostr relay multiplexer",
-  "version": "1.2.0+wf1",
+  "version": "1.2.0+wf2",
   "tile": "/nostrclient/static/images/nostr-bitcoin.png",
   "contributors": ["calle", "motorina0", "dni"],
   "min_lnbits_version": "1.4.0",
