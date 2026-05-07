@@ -4,10 +4,10 @@
     {
       "id": "nostrclient",
       "repo": "https://github.com/BenGWeeks/nostrclient",
-      "name": "Nostr Client",
+      "name": "Nostr Client (Weeks)",
       "version": "1.1.0+wf1",
       "min_lnbits_version": "1.0.0",
-      "short_description": "Weeks-family patched build of Nostr Client - returns NIP-01 OK and CLOSED responses to client EVENT/REQ messages so downstream relays/clients no longer time out.",
+      "short_description": "Weeks-family build — adds NIP-01 OK / CLOSED responses to client-published events (lnbits/nostrclient#68).",
       "icon": "https://raw.githubusercontent.com/BenGWeeks/nostrclient/weeks-family/static/images/nostr-bitcoin.png",
       "details_link": "https://raw.githubusercontent.com/BenGWeeks/nostrclient/weeks-family/config.json",
       "archive": "https://github.com/BenGWeeks/nostrclient/archive/refs/tags/v1.1.0-wf1.zip",
