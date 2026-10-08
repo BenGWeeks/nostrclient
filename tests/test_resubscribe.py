@@ -10,6 +10,7 @@ from nostr_sdk import RelayStatus as SdkRelayStatus
 
 from .. import router as router_module
 from ..nostr import relay_manager as relay_manager_module
+from ..nostr.message_pool import MessagePool
 from ..nostr.relay_manager import (
     CLOSED_RESEND_MAX_DELAY,
     CLOSED_RESEND_MIN_DELAY,
@@ -60,6 +61,7 @@ def _manager(sdk_relay: FakeSdkRelay, subscriptions: dict | None = None):
     manager.relays = {}
     manager._cached_subscriptions = dict(subscriptions or {})
     manager._subscriptions_lock = threading.Lock()
+    manager.message_pool = MessagePool()
     manager._client = FakeClient(sdk_relay)  # type: ignore[assignment]
     return manager
 
@@ -125,9 +127,6 @@ def _closed(manager: RelayManager, subscription_id: str):
         return manager._client.sdk_relay  # type: ignore[attr-defined]
 
     manager._get_sdk_relay = get_sdk_relay  # type: ignore[method-assign]
-    manager.message_pool = SimpleNamespace(  # type: ignore[assignment]
-        add_message=lambda *_: None
-    )
     handler = _NotificationHandler(manager)
     asyncio.run(handler.handle_msg(RelayUrl.parse(URL), message))
 
