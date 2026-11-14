@@ -86,3 +86,36 @@ def test_models_accept_null_values_and_defaults():
     assert config.private_ws_endpoint is None
     assert UserConfig(owner_id="admin").extra == Config()
     assert "private_ws_endpoint" in json.loads(config.model_dump_json())
+
+
+def test_malformed_event_returns_ok_false(monkeypatch):
+    router, websocket, manager = _router(monkeypatch, relays=["wss://relay.example"])
+    asyncio.run(router._handle_client_to_nostr(json.dumps(["EVENT", "notadict"])))
+    assert manager.published == []
+    assert json.loads(websocket.sent[-1])[:3] == ["OK", "", False]
+
+
+def test_relay_event_frames_reach_message_pool():
+    from nostr_sdk import EventBuilder, Keys, RelayMessage, RelayUrl
+
+    from ..nostr.relay_manager import _NotificationHandler
+
+    added: list[tuple[str, str]] = []
+    relay_state = SimpleNamespace(
+        update_from_sdk=lambda _sdk: None, append_error=lambda _m: None
+    )
+
+    async def get_sdk_relay(_url):
+        return None
+
+    manager = SimpleNamespace(
+        _ensure_relay_state=lambda _url: relay_state,
+        _get_sdk_relay=get_sdk_relay,
+        message_pool=SimpleNamespace(add_message=lambda m, u: added.append((m, u))),
+    )
+    event = EventBuilder.text_note("nwc").sign_with_keys(Keys.generate())
+    message = RelayMessage.event("sub", event)
+    handler = _NotificationHandler(manager)  # type: ignore[arg-type]
+    asyncio.run(handler.handle_msg(RelayUrl.parse("wss://relay.example"), message))
+    assert len(added) == 1
+    assert json.loads(added[0][0])[0:2] == ["EVENT", "sub"]

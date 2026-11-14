@@ -141,7 +141,12 @@ class NostrRouter:
             return
 
         if json_data[0] == "EVENT":
-            event_id = json_data[1].get("id", "") if len(json_data) > 1 else ""
+            if len(json_data) < 2 or not isinstance(json_data[1], dict):
+                await self.websocket.send_text(
+                    json.dumps(["OK", "", False, "invalid: event must be an object"])
+                )
+                return
+            event_id = json_data[1].get("id", "")
             if not nostr_client.relay_manager.relays:
                 # NIP-01: OK with failure when no relays are connected
                 await self.websocket.send_text(

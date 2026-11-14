@@ -175,6 +175,9 @@ async def api_get_config() -> Config:
 
 @nostrclient_api_router.put("/api/v1/config", dependencies=[Depends(check_admin)])
 async def api_update_config(data: Config):
+    # The private endpoint token is generated per response and must never be stored
+    data.private_ws_endpoint = None
     config = await update_config(owner_id="admin", config=data)
     assert config
+    config.private_ws_endpoint = encrypt_internal_message("relay", urlsafe=True)
     return config.model_dump()

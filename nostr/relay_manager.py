@@ -99,6 +99,11 @@ class _NotificationHandler(HandleNotification):
 
         if getattr(message_enum, "is_CLOSED", lambda: False)():
             relay.append_error(getattr(message_enum, "message", "Subscription closed."))
+            return
+
+        # nostr-sdk skips handle() for event ids it has already seen, including events this proxy published, so NWC requests and responses between two clients of this proxy were dropped; forward EVENT frames here (same fix as upstream lnbits/nostrclient#72)
+        if getattr(message_enum, "is_EVENT_MSG", lambda: False)():
+            self.relay_manager.message_pool.add_message(message_json, url)
 
     async def handle(
         self, relay_url: RelayUrl, subscription_id: str, event: Any
