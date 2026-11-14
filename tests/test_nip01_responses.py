@@ -119,3 +119,23 @@ def test_relay_event_frames_reach_message_pool():
     asyncio.run(handler.handle_msg(RelayUrl.parse("wss://relay.example"), message))
     assert len(added) == 1
     assert json.loads(added[0][0])[0:2] == ["EVENT", "sub"]
+
+
+def test_update_config_never_stores_private_endpoint(monkeypatch):
+    from .. import views_api
+
+    stored: list[Config] = []
+
+    async def fake_update_config(owner_id, config):
+        stored.append(config.model_copy())
+        return config
+
+    monkeypatch.setattr(views_api, "update_config", fake_update_config)
+    monkeypatch.setattr(
+        views_api, "encrypt_internal_message", lambda *_a, **_k: "fresh-token"
+    )
+    data = Config(public_ws=True, private_ws_endpoint="client-supplied")
+    result = asyncio.run(views_api.api_update_config(data))
+    assert stored[0].private_ws_endpoint is None
+    assert stored[0].public_ws is True
+    assert result["private_ws_endpoint"] == "fresh-token"
