@@ -18,9 +18,8 @@ from .crud import (
     get_relays,
     update_config,
 )
-from .helpers import normalize_public_key
+from .helpers import create_encrypted_dm_message
 from .models import Config, Relay, RelayStatus, TestMessage, TestMessageResponse
-from .nostr.key import EncryptedDirectMessage, PrivateKey
 from .router import NostrRouter, all_routers, nostr_client
 
 nostrclient_api_router = APIRouter()
@@ -89,20 +88,16 @@ async def api_delete_relay(relay: Relay) -> None:
 )
 async def api_test_endpoint(data: TestMessage) -> TestMessageResponse:
     try:
-        to_public_key = normalize_public_key(data.reciever_public_key)
-
-        pk = bytes.fromhex(data.sender_private_key) if data.sender_private_key else None
-        private_key = PrivateKey(pk) if pk else PrivateKey()
-
-        dm = EncryptedDirectMessage(
-            recipient_pubkey=to_public_key, cleartext_content=data.message
+        private_key, to_public_key, event_json = create_encrypted_dm_message(
+            data.sender_private_key,
+            data.reciever_public_key,
+            data.message,
         )
-        private_key.sign_event(dm)
 
         return TestMessageResponse(
-            private_key=private_key.hex(),
+            private_key=private_key,
             public_key=to_public_key,
-            event_json=dm.to_message(),
+            event_json=event_json,
         )
     except (ValueError, AssertionError) as ex:
         raise HTTPException(
@@ -180,6 +175,9 @@ async def api_get_config() -> Config:
 
 @nostrclient_api_router.put("/api/v1/config", dependencies=[Depends(check_admin)])
 async def api_update_config(data: Config):
+    # The private endpoint token is generated per response and must never be stored
+    data.private_ws_endpoint = None
     config = await update_config(owner_id="admin", config=data)
     assert config
-    return config.dict()
+    config.private_ws_endpoint = encrypt_internal_message("relay", urlsafe=True)
+    return config.model_dump()
