@@ -72,7 +72,8 @@ class RelayConnection:
         closed = self.closed_subscriptions.setdefault(
             subscription_id, ClosedSubscription()
         )
-        if now - closed.closed_at > CLOSED_RESEND_MAX_DELAY:
+        # start over only after a quiet period following the last re-send
+        if now - closed.retry_at > CLOSED_RESEND_MAX_DELAY:
             closed.attempts = 0
         delay = min(
             CLOSED_RESEND_MIN_DELAY * 2 ** min(closed.attempts, 16),
@@ -405,13 +406,14 @@ class RelayManager:
             if filters is None:
                 relay.closed_subscriptions.pop(subscription_id, None)
                 continue
-            closed.pending = False
             logger.info(
                 f"[Relay: {relay.url}] Re-sending closed subscription"
                 f" '{subscription_id}' (attempt {closed.attempts})."
             )
             message = self._req_message(subscription_id, filters)
             await self._client.send_msg_to([relay_url], message)
+            # only now: a failed send is retried on the next check
+            closed.pending = False
 
     def _handle_closed(
         self, relay: RelayConnection, subscription_id: str, reason: str

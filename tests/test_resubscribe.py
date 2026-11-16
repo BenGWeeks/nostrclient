@@ -21,6 +21,7 @@ from ..nostr.relay_manager import (
 from ..router import NostrRouter
 
 URL = "wss://relay.example"
+RECONNECT_TIMEOUT_SECONDS = 120
 
 
 class FakeSdkRelay:
@@ -160,16 +161,40 @@ def test_closed_for_unknown_subscription_is_ignored():
 
 def test_closed_backoff_grows_and_is_capped():
     relay = RelayConnection(url=URL)
-    delays = [relay.subscription_closed("sub1", 1000.0 + i) for i in range(12)]
+    now = 1000.0
+    delays = []
+    for _ in range(12):
+        delay = relay.subscription_closed("sub1", now)
+        delays.append(delay)
+        now += delay + 5  # re-sent after the delay, closed again right away
     assert delays[:3] == [
         CLOSED_RESEND_MIN_DELAY,
         CLOSED_RESEND_MIN_DELAY * 2,
         CLOSED_RESEND_MIN_DELAY * 4,
     ]
-    assert delays[-1] == CLOSED_RESEND_MAX_DELAY
-    # a CLOSED long after the previous one starts over
-    quiet = 1000.0 + 2 * CLOSED_RESEND_MAX_DELAY
+    # stays at the cap for a relay that keeps refusing
+    assert delays[-3:] == [CLOSED_RESEND_MAX_DELAY] * 3
+    # a CLOSED long after the last re-send starts over
+    quiet = now + 2 * CLOSED_RESEND_MAX_DELAY
     assert relay.subscription_closed("sub1", quiet) == CLOSED_RESEND_MIN_DELAY
+
+
+def test_failed_resend_of_closed_subscription_is_retried(monkeypatch):
+    manager = _manager(FakeSdkRelay(), {"sub1": [{"kinds": [23194]}]})
+    _check(manager)
+    now = time.time()
+    monkeypatch.setattr(relay_manager_module.time, "time", lambda: now)
+    _closed(manager, "sub1")
+    later = now + CLOSED_RESEND_MIN_DELAY + 1
+    monkeypatch.setattr(relay_manager_module.time, "time", lambda: later)
+
+    manager._client.fail_send = True  # type: ignore[attr-defined]
+    assert len(_check(manager)) == 1
+    assert manager.relays[URL].closed_subscriptions["sub1"].pending
+
+    manager._client.fail_send = False  # type: ignore[attr-defined]
+    assert len(_check(manager)) == 2
+    assert not manager.relays[URL].closed_subscriptions["sub1"].pending
 
 
 def test_client_close_forgets_closed_subscription():
@@ -217,8 +242,11 @@ def test_req_with_same_id_replaces_previous_subscription(monkeypatch):
     for kind in (1, 2):
         message = json.dumps(["REQ", "sub1", {"kinds": [kind]}])
         asyncio.run(nostr_router._handle_client_to_nostr(message))
+        for rewritten in nostr_router.subscriptions:
+            NostrRouter.received_subscription_events.setdefault(rewritten, [])
 
     assert len(closed) == 1
+    assert closed[0] not in NostrRouter.received_subscription_events
     assert list(subscriptions.values()) == [[{"kinds": [2]}]]
     assert list(nostr_router.original_subscription_ids.values()) == ["sub1"]
 
@@ -227,6 +255,7 @@ def test_real_sdk_reconnect_resends_subscription():
     """End to end: a relay drops the connection, nostr-sdk reconnects by itself."""
     websockets = pytest.importorskip("websockets")
     connections: list[list] = []
+    expected = ["REQ", "sub1", {"kinds": [23194]}]
 
     async def relay(ws):
         received: list = []
@@ -237,18 +266,21 @@ def test_real_sdk_reconnect_resends_subscription():
                 await ws.close()
 
     async def scenario(manager: RelayManager):
-        server = await websockets.serve(relay, "127.0.0.1", 0)
+        server = await websockets.serve(relay, "127.0.0.1", 0, close_timeout=0.5)
         url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
         try:
             await asyncio.to_thread(manager.add_relay, url)
             await asyncio.to_thread(
                 manager.add_subscription, "sub1", [{"kinds": [23194]}]
             )
-            for _ in range(60):  # nostr-sdk retries after ~10s
+            # nostr-sdk retries on its own schedule (about 10s, more on a busy
+            # machine), so wait on the outcome with a generous deadline
+            deadline = time.monotonic() + RECONNECT_TIMEOUT_SECONDS
+            while time.monotonic() < deadline:
                 await asyncio.to_thread(manager.check_and_restart_relays)
-                if len(connections) > 1 and connections[-1]:
+                if any(expected in received for received in connections[1:]):
                     break
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.25)
         finally:
             server.close()
 
@@ -258,5 +290,5 @@ def test_real_sdk_reconnect_resends_subscription():
     finally:
         manager.shutdown()
 
-    assert len(connections) > 1, "nostr-sdk did not reconnect"
-    assert ["REQ", "sub1", {"kinds": [23194]}] in connections[-1]
+    assert len(connections) > 1, "nostr-sdk did not reconnect in time"
+    assert any(expected in received for received in connections[1:])
