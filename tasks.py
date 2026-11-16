@@ -6,6 +6,9 @@ from .crud import get_relays
 from .nostr.message_pool import EndOfStoredEventsMessage, EventMessage, NoticeMessage
 from .router import NostrRouter, nostr_client
 
+# Also bounds how long a relay stays without subscriptions after a reconnect.
+CHECK_RELAYS_INTERVAL = 5
+
 
 async def init_relays():
     # get relays from db
@@ -17,10 +20,10 @@ async def init_relays():
 
 
 async def check_relays():
-    """Check relays that have been disconnected"""
+    """Reconnect dropped relays and re-send their subscriptions"""
     while True:
         try:
-            await asyncio.sleep(20)
+            await asyncio.sleep(CHECK_RELAYS_INTERVAL)
             nostr_client.relay_manager.check_and_restart_relays()
         except Exception as e:
             logger.warning(f"Cannot restart relays: '{e!s}'.")

@@ -23,6 +23,17 @@ from nostr_sdk import (
 
 from .message_pool import MessagePool, NoticeMessage
 
+CLOSED_RESEND_MIN_DELAY = 30
+CLOSED_RESEND_MAX_DELAY = 60 * 60
+
+
+@dataclass
+class ClosedSubscription:
+    attempts: int = 0
+    closed_at: float = 0
+    retry_at: float = 0
+    pending: bool = False
+
 
 @dataclass
 class RelayConnection:
@@ -40,6 +51,9 @@ class RelayConnection:
     num_sent_events: int = 0
     num_subscriptions: int = 0
     ping: int = 0
+    # SDK connections whose subscriptions were (re)sent, see _resubscribe_relay
+    connection_count: int = 0
+    closed_subscriptions: dict[str, ClosedSubscription] = field(default_factory=dict)
 
     def close(self) -> None:
         self.connected = False
@@ -53,17 +67,42 @@ class RelayConnection:
         self.last_error_date = int(time.time())
         self.error_list = [message, *self.error_list][:50]
 
+    def subscription_closed(self, subscription_id: str, now: float) -> float:
+        """Schedule a re-send (with backoff) of a subscription the relay closed."""
+        closed = self.closed_subscriptions.setdefault(
+            subscription_id, ClosedSubscription()
+        )
+        if now - closed.closed_at > CLOSED_RESEND_MAX_DELAY:
+            closed.attempts = 0
+        delay = min(
+            CLOSED_RESEND_MIN_DELAY * 2 ** min(closed.attempts, 16),
+            CLOSED_RESEND_MAX_DELAY,
+        )
+        closed.attempts += 1
+        closed.closed_at = now
+        closed.retry_at = now + delay
+        closed.pending = True
+        return delay
+
     def update_from_sdk(self, relay: SdkRelay | None) -> None:
+        was_connected = self.connected
         self.relay = relay
         if relay is None:
             self.connected = False
             self.shutdown = True
             self.ping = 0
+            if was_connected:
+                logger.warning(f"[Relay: {self.url}] Disconnected (relay removed).")
             return
 
         status = relay.status()
         self.connected = status == SdkRelayStatus.CONNECTED
         self.shutdown = status in {SdkRelayStatus.TERMINATED, SdkRelayStatus.BANNED}
+        if self.connected and not was_connected:
+            logger.info(f"[Relay: {self.url}] Connected.")
+        elif was_connected and not self.connected:
+            status_name = getattr(status, "name", str(status))
+            logger.warning(f"[Relay: {self.url}] Disconnected (status: {status_name}).")
 
         try:
             latency = relay.stats().latency()
@@ -89,6 +128,9 @@ class _NotificationHandler(HandleNotification):
             return
 
         if message_enum.is_NOTICE():
+            logger.info(
+                f"[Relay: {url}] NOTICE: '{getattr(message_enum, 'message', '')}'"
+            )
             relay.add_notice(getattr(message_enum, "message", ""))
             self.relay_manager.message_pool.add_message(message_json, url)
             return
@@ -98,7 +140,11 @@ class _NotificationHandler(HandleNotification):
             return
 
         if getattr(message_enum, "is_CLOSED", lambda: False)():
-            relay.append_error(getattr(message_enum, "message", "Subscription closed."))
+            reason = getattr(message_enum, "message", "Subscription closed.")
+            relay.append_error(reason)
+            self.relay_manager._handle_closed(
+                relay, getattr(message_enum, "subscription_id", ""), reason
+            )
             return
 
         # nostr-sdk skips handle() for event ids it has already seen, including events this proxy published, so NWC requests and responses between two clients of this proxy were dropped; forward EVENT frames here (same fix as upstream lnbits/nostrclient#72)
@@ -168,6 +214,8 @@ class RelayManager:
         logger.info(f"Closing subscription: '{subscription_id}'.")
         with self._subscriptions_lock:
             self._cached_subscriptions.pop(subscription_id, None)
+        for relay in list(self.relays.values()):
+            relay.closed_subscriptions.pop(subscription_id, None)
         self._run_coro(self._close_subscription(subscription_id), suppress=True)
         self._refresh_subscription_counts()
 
@@ -240,7 +288,7 @@ class RelayManager:
             return future.result(timeout=15)
         except Exception as exc:
             if suppress:
-                logger.debug(f"[nostrclient] Background SDK call failed: {exc!s}")
+                logger.warning(f"[nostrclient] Background SDK call failed: {exc!r}")
                 return None
             raise
 
@@ -310,17 +358,83 @@ class RelayManager:
                 SdkRelayStatus.INITIALIZED,
                 SdkRelayStatus.TERMINATED,
             }:
+                logger.info(f"[Relay: {url}] Not connected, reconnecting.")
                 try:
                     await self._client.connect_relay(relay_url)
                 except Exception as exc:
                     relay.append_error(str(exc))
+            await self._resubscribe_relay(relay, relay_url, sdk_relay)
 
-    async def _replay_cached_subscriptions(self, relay_urls: list[RelayUrl]) -> None:
+    async def _resubscribe_relay(
+        self, relay: RelayConnection, relay_url: RelayUrl, sdk_relay: SdkRelay
+    ) -> None:
+        """
+        Subscriptions are sent as raw REQ frames, which nostr-sdk does not track,
+        so it does not send them again after it silently reconnects to a relay.
+        Re-send them whenever the relay has a connection we have not served yet,
+        and re-send (with backoff) the ones the relay closed.
+        """
+        if not relay.connected:
+            return
+        try:
+            connections = sdk_relay.stats().success()
+            if connections > relay.connection_count:
+                count = await self._replay_cached_subscriptions([relay_url])
+                relay.connection_count = connections
+                relay.closed_subscriptions.clear()
+                logger.info(
+                    f"[Relay: {relay.url}] Connection #{connections} established,"
+                    f" sent {count} subscription(s)."
+                )
+                return
+            await self._resend_closed_subscriptions(relay, relay_url)
+        except Exception as exc:
+            logger.warning(f"[Relay: {relay.url}] Failed to resubscribe: {exc!s}")
+
+    async def _resend_closed_subscriptions(
+        self, relay: RelayConnection, relay_url: RelayUrl
+    ) -> None:
+        now = time.time()
+        for subscription_id, closed in list(relay.closed_subscriptions.items()):
+            if not closed.pending or closed.retry_at > now:
+                continue
+            with self._subscriptions_lock:
+                filters = self._cached_subscriptions.get(subscription_id)
+            if filters is None:
+                relay.closed_subscriptions.pop(subscription_id, None)
+                continue
+            closed.pending = False
+            logger.info(
+                f"[Relay: {relay.url}] Re-sending closed subscription"
+                f" '{subscription_id}' (attempt {closed.attempts})."
+            )
+            message = self._req_message(subscription_id, filters)
+            await self._client.send_msg_to([relay_url], message)
+
+    def _handle_closed(
+        self, relay: RelayConnection, subscription_id: str, reason: str
+    ) -> None:
+        with self._subscriptions_lock:
+            is_active = subscription_id in self._cached_subscriptions
+        if not is_active:
+            logger.info(
+                f"[Relay: {relay.url}] CLOSED '{subscription_id}'"
+                f" (not an active subscription): '{reason}'"
+            )
+            return
+        delay = relay.subscription_closed(subscription_id, time.time())
+        logger.warning(
+            f"[Relay: {relay.url}] CLOSED active subscription '{subscription_id}':"
+            f" '{reason}'. Re-sending in {delay}s."
+        )
+
+    async def _replay_cached_subscriptions(self, relay_urls: list[RelayUrl]) -> int:
         with self._subscriptions_lock:
             cached = list(self._cached_subscriptions.items())
         for subscription_id, filters in cached:
             message = self._req_message(subscription_id, filters)
             await self._client.send_msg_to(relay_urls, message)
+        return len(cached)
 
     async def _send_to_relays(
         self, relay_urls: list[str], message: ClientMessage

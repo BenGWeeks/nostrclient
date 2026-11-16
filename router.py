@@ -167,11 +167,18 @@ class NostrRouter:
                 json.dumps(["CLOSED", subscription_id, "error: no relay connections"])
             )
             return
+        # NIP-01: a REQ with an id already in use replaces that subscription
+        replaced = [
+            k for k, v in self.original_subscription_ids.items() if v == subscription_id
+        ]
         subscription_id_rewritten = urlsafe_short_hash()
         self.original_subscription_ids[subscription_id_rewritten] = subscription_id
         filters = json_data[2:]
 
         nostr_client.relay_manager.add_subscription(subscription_id_rewritten, filters)
+        for stale_id in replaced:
+            self.original_subscription_ids.pop(stale_id, None)
+            nostr_client.relay_manager.close_subscription(stale_id)
 
     def _handle_client_close(self, subscription_id):
         subscription_id_rewritten = next(
