@@ -38,7 +38,8 @@ class NostrRouter:
         self.tasks.append(asyncio.create_task(self._nostr_to_client()))
 
     async def stop(self):
-        nostr_client.relay_manager.close_subscriptions(self.subscriptions)
+        for s in self.subscriptions:
+            self._close_subscription(s)
         self.connected = False
 
         for t in self.tasks:
@@ -167,11 +168,18 @@ class NostrRouter:
                 json.dumps(["CLOSED", subscription_id, "error: no relay connections"])
             )
             return
+        # NIP-01: a REQ with an id already in use replaces that subscription
+        replaced = [
+            k for k, v in self.original_subscription_ids.items() if v == subscription_id
+        ]
         subscription_id_rewritten = urlsafe_short_hash()
         self.original_subscription_ids[subscription_id_rewritten] = subscription_id
         filters = json_data[2:]
 
         nostr_client.relay_manager.add_subscription(subscription_id_rewritten, filters)
+        for stale_id in replaced:
+            self.original_subscription_ids.pop(stale_id, None)
+            self._close_subscription(stale_id)
 
     def _handle_client_close(self, subscription_id):
         subscription_id_rewritten = next(
@@ -184,7 +192,7 @@ class NostrRouter:
         )
         if subscription_id_rewritten:
             self.original_subscription_ids.pop(subscription_id_rewritten)
-            nostr_client.relay_manager.close_subscription(subscription_id_rewritten)
+            self._close_subscription(subscription_id_rewritten)
             logger.info(
                 f"""
             Unsubscribe from '{subscription_id_rewritten}'.
@@ -193,3 +201,10 @@ class NostrRouter:
             )
         else:
             logger.info(f"Failed to unsubscribe from '{subscription_id}.'")
+
+    @staticmethod
+    def _close_subscription(subscription_id: str):
+        """Close upstream and drop messages no client will read."""
+        nostr_client.relay_manager.close_subscription(subscription_id)
+        NostrRouter.received_subscription_events.pop(subscription_id, None)
+        NostrRouter.received_subscription_eosenotices.pop(subscription_id, None)
