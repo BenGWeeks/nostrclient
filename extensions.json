@@ -25,6 +25,18 @@
       "details_link": "https://raw.githubusercontent.com/BenGWeeks/nostrclient/weeks-family/config.json",
       "archive": "https://github.com/BenGWeeks/nostrclient/archive/refs/tags/v1.3.1-wf1.zip",
       "hash": "b22411d1df03431d1a7efd4969f69a9b20c9be995e092f02395f9852bf6a7e54"
+    },
+    {
+      "id": "nostrclient",
+      "repo": "https://github.com/BenGWeeks/nostrclient",
+      "name": "Nostr Client (Weeks)",
+      "version": "1.3.1+wf2",
+      "min_lnbits_version": "1.7.0",
+      "short_description": "Weeks-family build on upstream v1.3.1 for LNbits 1.7: re-sends subscriptions after relay reconnects, CLOSED passthrough, relay logging, #75 subscription pruning, plus wf1 changes.",
+      "icon": "https://raw.githubusercontent.com/BenGWeeks/nostrclient/weeks-family/static/images/nostr-bitcoin.png",
+      "details_link": "https://raw.githubusercontent.com/BenGWeeks/nostrclient/weeks-family/config.json",
+      "archive": "https://github.com/BenGWeeks/nostrclient/archive/refs/tags/v1.3.1-wf2.zip",
+      "hash": "b8fdbc69474e4a63e9952cef08e04ffdaa2be1122786727424f4a02dbe29172c"
     }
   ]
 }
